@@ -1,0 +1,97 @@
+version: '3.9'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9093:9093"
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  dispatch:
+    build: ./services/dispatch
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    env_file: .env
+
+  simulator:
+    build: ./services/simulator
+    depends_on:
+      - kafka
+    env_file: .env
+
+  gateway:
+    build: ./services/gateway
+    depends_on:
+      - dispatch
+      - postgres
+      - redis
+    env_file: .env
+    ports:
+      - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    depends_on:
+      - prometheus
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - ./observability/grafana/dashboard.json:/var/lib/grafana/dashboards/dispatch.json
+    ports:
+      - "3000:3000"
+
+  tempo:
+    image: grafana/tempo:2.6.0
+    command: ["-config.expand-env=true"]
+    environment:
+      - JAEGER_INGEST_ENABLED=true
+    ports:
+      - "3200:3200"   # Tempo HTTP
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+
+volumes:
+  pgdata:
